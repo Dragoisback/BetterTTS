@@ -1,0 +1,8 @@
+version: 0.20.0
+files:
+  - url: https://github.com/SysAdminDoc/BetterTTS/releases/download/v0.20.0/BetterTTS.Setup.0.20.0.exe
+    sha512: stkEoG8dOnwQnjsAnX1S8e1XJiEVl4K5McKSIseyFUuvsfhxaUj8Eq1Rgxs+J87jCxbdWS+Yop5lNlZbFA5hQQ==
+    size: 228110705
+path: https://github.com/SysAdminDoc/BetterTTS/releases/download/v0.20.0/BetterTTS.Setup.0.20.0.exe
+sha512: stkEoG8dOnwQnjsAnX1S8e1XJiEVl4K5McKSIseyFUuvsfhxaUj8Eq1Rgxs+J87jCxbdWS+Yop5lNlZbFA5hQQ==
+releaseDate: '2026-07-25T21:45:03.813Z'
