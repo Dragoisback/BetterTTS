@@ -217,9 +217,29 @@ function readProductionRuntimeRows(root, directRows) {
     }
   }
   for (const direct of directRows) {
-    if (![...rows.values()].some((row) => row.name === direct.name)) {
+    const present = [...rows.values()].some((row) => row.name === direct.name)
+    if (present) continue
+    const lockEntry = lock.packages?.[`node_modules/${direct.name}`]
+    if (lockEntry?.optional !== true) {
       throw new Error(`Direct runtime package is not present in the production lock inventory: ${direct.name}`)
     }
+    // Platform-specific optional packages (for example the Windows-only
+    // `sherpa-onnx-win-x64` native binary) are part of the release runtime inventory
+    // but are not installed on every platform. Materialize them from the lockfile
+    // version and the authoritative license table so the SBOM stays complete and
+    // deterministic regardless of the platform it is generated on.
+    const version = lockEntry.version
+    if (typeof version !== 'string' || !VERSION_RE.test(version)) {
+      throw new Error(`Platform optional runtime package has an invalid lockfile version: ${direct.name}`)
+    }
+    rows.set(`${direct.name}@${version}`, {
+      name: direct.name,
+      version,
+      direct: true,
+      expected: direct.expected,
+      actual: direct.actual ?? direct.expected,
+      license: direct.expected,
+    })
   }
   return [...rows.values()]
 }

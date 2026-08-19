@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,11 +38,35 @@ function packageJsonPath(name, root) {
   return join(root, 'node_modules', ...name.split('/'), 'package.json')
 }
 
+// Some runtime packages listed in the license table are platform-specific optional
+// native binaries (for example the Windows-only `sherpa-onnx-win-x64`). They are not
+// installed on every CI platform, so when their manifest is absent we trust the
+// authoritative license table instead of crashing the SBOM/license gate.
+export function isPlatformOptionalPackage(name, root = process.cwd()) {
+  const lockPath = join(root, 'package-lock.json')
+  if (!existsSync(lockPath)) return false
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(lockPath, 'utf8'))
+  } catch {
+    return false
+  }
+  const entry = lock?.packages?.[`node_modules/${name}`]
+  return entry?.optional === true
+}
+
 export function readLicenseRows(root = process.cwd(), licenseEntries = EXPECTED_LICENSES) {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   validateLicenseTable(packageJson, licenseEntries)
   return licenseEntries.map(([name, expected]) => {
-    const pkg = JSON.parse(readFileSync(packageJsonPath(name, root), 'utf8'))
+    const manifestPath = packageJsonPath(name, root)
+    if (!existsSync(manifestPath)) {
+      if (!isPlatformOptionalPackage(name, root)) {
+        throw new Error(`Runtime license package manifest is missing: ${manifestPath}`)
+      }
+      return { name, expected, actual: expected }
+    }
+    const pkg = JSON.parse(readFileSync(manifestPath, 'utf8'))
     return { name, expected, actual: pkg.license ?? 'UNDECLARED' }
   })
 }
