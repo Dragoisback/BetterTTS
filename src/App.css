@@ -351,6 +351,62 @@ footer {
   text-transform: uppercase;
 }
 
+.script-limit-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.script-limit-indicator > span {
+  color: var(--muted);
+  font: 660 11px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.character-limit-select {
+  width: auto;
+  height: 24px;
+  margin: 0;
+  padding: 0 8px;
+  font: 600 11px/1 var(--sans);
+  color: var(--muted);
+  background: var(--control-bg, #1a1a1a);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.character-limit-select:hover {
+  color: var(--heading);
+  border-color: var(--border-strong);
+}
+
+.character-limit-select:focus-visible {
+  color: var(--heading);
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+  outline: none;
+}
+
+.limit-option-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.limit-option-row select {
+  margin-bottom: 4px;
+}
+
+.limit-option-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .workspace-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

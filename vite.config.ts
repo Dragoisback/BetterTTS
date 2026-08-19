@@ -110,6 +110,10 @@ function buildLogger(): Logger {
 
 export default defineConfig(({ command }) => ({
   base: isElectron ? './' : '/BetterTTS/',
+  server: {
+    host: '0.0.0.0',
+    allowedHosts: true,
+  },
   resolve: {
     alias: {
       'node:module': join(import.meta.dirname, 'src', 'browser-node-module-shim.ts'),

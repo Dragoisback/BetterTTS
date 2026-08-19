@@ -1,13 +1,48 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_CHARACTER_LIMIT,
   MAX_PRONUNCIATIONS,
+  parseCharacterLimitSetting,
   parseCleanupSetting,
   parsePunctuationPauseSetting,
   parsePronunciationSetting,
+  serializeCharacterLimitSetting,
 } from './settings.ts'
 import { DEFAULT_CLEANUP, DEFAULT_PUNCTUATION_PAUSES } from './text.ts'
 
 describe('persisted editor settings', () => {
+  it('parses and serializes character limit settings with unlimited support', () => {
+    expect(parseCharacterLimitSetting(null)).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('')).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('   ')).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('unlimited')).toBeNull()
+    expect(parseCharacterLimitSetting('UNLIMITED')).toBeNull()
+    expect(parseCharacterLimitSetting('  unlimited  ')).toBeNull()
+    expect(parseCharacterLimitSetting('0')).toBeNull()
+    expect(parseCharacterLimitSetting('none')).toBeNull()
+    expect(parseCharacterLimitSetting('null')).toBeNull()
+    expect(parseCharacterLimitSetting('Infinity')).toBeNull()
+    expect(parseCharacterLimitSetting('5000')).toBe(5000)
+    expect(parseCharacterLimitSetting('10000')).toBe(10000)
+    expect(parseCharacterLimitSetting('25000')).toBe(25000)
+    expect(parseCharacterLimitSetting('50000')).toBe(50000)
+    expect(parseCharacterLimitSetting('100000')).toBe(100000)
+    expect(parseCharacterLimitSetting('invalid')).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('-100')).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('0.5')).toBe(DEFAULT_CHARACTER_LIMIT)
+    expect(parseCharacterLimitSetting('NaN')).toBe(DEFAULT_CHARACTER_LIMIT)
+
+    expect(serializeCharacterLimitSetting(null)).toBe('unlimited')
+    expect(serializeCharacterLimitSetting(0)).toBe('unlimited')
+    expect(serializeCharacterLimitSetting(5000)).toBe('5000')
+    expect(serializeCharacterLimitSetting(10000)).toBe('10000')
+    expect(serializeCharacterLimitSetting(25000)).toBe('25000')
+    expect(serializeCharacterLimitSetting(50000)).toBe('50000')
+    expect(serializeCharacterLimitSetting(100000)).toBe('100000')
+    expect(serializeCharacterLimitSetting(Infinity)).toBe('unlimited')
+    expect(serializeCharacterLimitSetting(-500)).toBe('unlimited')
+  })
+
   it('rejects malformed and non-object pronunciation dictionaries', () => {
     expect(parsePronunciationSetting('{')).toEqual({})
     expect(parsePronunciationSetting('null')).toEqual({})
