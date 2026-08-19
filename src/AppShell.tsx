@@ -218,7 +218,18 @@ import {
 import { SUPERTONIC_DEFAULT_STEPS, SUPERTONIC_MODEL_ID, SUPERTONIC_SAMPLE_RATE, SUPERTONIC_VOICES, type SupertonicVoiceId, clampSupertonicSpeed, loadSupertonic, resetSupertonicSession, supertonicVoiceUrl, synthesizeSupertonic } from './lib/supertonic.ts'
 import { applyPunctuationPauses, type CleanupOptions, DEFAULT_CLEANUP, DEFAULT_PUNCTUATION_PAUSES, PAUSE_TAG, checkSynthesisCompleteness, cleanupText, formatBytes, parseDialogLines, reflowPdfText, slugify, splitInput, splitNarratorText, stripProsodyTags, type NarratorRole, type NarratorSegment, type PunctuationPauseKey, type PunctuationPauseSettings } from './lib/text.ts'
 import type { TextNormalizationPreview, TextNormalizationRuleId } from './lib/text-normalization-preview.ts'
-import { MAX_PRONUNCIATIONS, MAX_PRONUNCIATION_VALUE_CHARS, MAX_PRONUNCIATION_WORD_CHARS, parseCleanupSetting, parsePronunciationDictionarySetting, parsePunctuationPauseSetting } from './lib/settings.ts'
+import {
+  CHARACTER_LIMIT_STORAGE_KEY,
+  DEFAULT_CHARACTER_LIMIT,
+  MAX_PRONUNCIATIONS,
+  MAX_PRONUNCIATION_VALUE_CHARS,
+  MAX_PRONUNCIATION_WORD_CHARS,
+  parseCharacterLimitSetting,
+  parseCleanupSetting,
+  parsePronunciationDictionarySetting,
+  parsePunctuationPauseSetting,
+  serializeCharacterLimitSetting,
+} from './lib/settings.ts'
 import {
   TECH_PRONUNCIATION_PACK,
   applyPronunciationRules,
@@ -258,7 +269,6 @@ const PREVIEW_CACHE_MAX_ENTRIES = 20
 const MELO_MODEL_ID = 'myshell-ai/MeloTTS-Chinese'
 const MELO_MODEL_REVISION = 'af5d207a364ea4208c6f589c89f57f88414bdd16'
 const MELO_SAMPLE_RATE = 44_100
-const MAX_TEXT_CHARS = 5000
 const BENCHMARK_OPT_IN_KEY = 'bettertts-benchmark-enabled'
 const MAX_IMPORT_BYTES = 25 * 1024 * 1024
 const ARTICLE_IMPORT_TIMEOUT_MS = 15_000
@@ -1648,6 +1658,14 @@ function App() {
       return parseCleanupSetting(window.localStorage.getItem('bettertts-cleanup'))
     } catch { return DEFAULT_CLEANUP }
   })
+  const [characterLimit, setCharacterLimit] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return DEFAULT_CHARACTER_LIMIT
+    try {
+      return parseCharacterLimitSetting(window.localStorage.getItem(CHARACTER_LIMIT_STORAGE_KEY))
+    } catch {
+      return DEFAULT_CHARACTER_LIMIT
+    }
+  })
   const [text, setText] = useState(STARTER_TEXT)
   const [readerDocument, setReaderDocument] = useState<ReaderDocument | null>(null)
   const [importedText, setImportedText] = useState<ImportedTextSnapshot | null>(null)
@@ -1898,8 +1916,8 @@ function App() {
   const kittenRuntimeReady = hasKittenWebGpu()
   const speedMin = engine === 'supertonic' ? 0.8 : 0.5
   const speedMax = engine === 'supertonic' ? 1.2 : engine === 'kitten' ? 2 : 1.5
-  const usableText = text.slice(0, MAX_TEXT_CHARS)
-  const overLimit = text.length > MAX_TEXT_CHARS
+  const usableText = characterLimit ? text.slice(0, characterLimit) : text
+  const overLimit = characterLimit !== null && text.length > characterLimit
 
   function refreshCleanupPreview(
     sourceText: string,
@@ -1979,7 +1997,7 @@ function App() {
       return
     }
     const previous = captureNormalizationState()
-    const nextText = current.preview.output.slice(0, MAX_TEXT_CHARS)
+    const nextText = characterLimit ? current.preview.output.slice(0, characterLimit) : current.preview.output
     const nextDocument = readerDocument
       ? createReaderDocument({ kind: current.sourceKind ?? readerDocument.kind, title: readerDocument.title, text: current.preview.output })
       : null
@@ -1990,8 +2008,8 @@ function App() {
     closeCleanupPreview()
     showToast({
       tone: 'ok',
-      message: current.preview.output.length > MAX_TEXT_CHARS
-        ? `Normalization applied; editor trimmed to ${MAX_TEXT_CHARS} characters.`
+      message: characterLimit && current.preview.output.length > characterLimit
+        ? `Normalization applied; editor trimmed to ${characterLimit.toLocaleString()} characters.`
         : 'Normalization applied.',
       action: {
         label: 'Undo cleanup',
@@ -2009,13 +2027,13 @@ function App() {
     if (!original) return
     const previous = captureNormalizationState()
     setNormalizationUndo(previous)
-    setText(original.text.slice(0, MAX_TEXT_CHARS))
+    setText(characterLimit ? original.text.slice(0, characterLimit) : original.text)
     setReaderDocument(original.document)
     closeCleanupPreview()
     showToast({
       tone: 'ok',
-      message: original.text.length > MAX_TEXT_CHARS
-        ? `Original import restored; editor trimmed to ${MAX_TEXT_CHARS} characters.`
+      message: characterLimit && original.text.length > characterLimit
+        ? `Original import restored; editor trimmed to ${characterLimit.toLocaleString()} characters.`
         : 'Original import restored.',
       action: {
         label: 'Undo restore',
@@ -2029,7 +2047,7 @@ function App() {
   }
 
   function setImportedSource(source: { text: string; document: ReaderDocument }) {
-    const editorText = source.text.slice(0, MAX_TEXT_CHARS)
+    const editorText = characterLimit ? source.text.slice(0, characterLimit) : source.text
     setText(editorText)
     setPendingEpubMapping(null)
     setReaderDocument(source.document)
@@ -2612,6 +2630,10 @@ function App() {
   }, [rvcSettings])
 
   useEffect(() => {
+    persistSetting(CHARACTER_LIMIT_STORAGE_KEY, serializeCharacterLimitSetting(characterLimit))
+  }, [characterLimit])
+
+  useEffect(() => {
     persistSetting(OPENAI_TTS_PORT_STORAGE_KEY, String(openAiTtsPort))
   }, [openAiTtsPort])
 
@@ -2649,7 +2671,7 @@ function App() {
     const unsubscribeStatus = desktopIntegrations.onStatus(applyStatus)
     const unsubscribeText = desktopIntegrations.onText((message) => {
       if (cancelled || typeof message.text !== 'string') return
-      const nextText = message.text.slice(0, MAX_TEXT_CHARS)
+      const nextText = characterLimit ? message.text.slice(0, characterLimit) : message.text
       if (!nextText.trim()) return
       setText(nextText)
       showToast({ tone: 'ok', message: `Loaded ${typeof message.source === 'string' ? message.source : 'external text'} into the script.` })
@@ -3597,7 +3619,8 @@ function App() {
     setStatus('Capturing screen text…')
     try {
       const result = await desktopIntegrations.ocr()
-      const nextText = typeof result.text === 'string' ? result.text.slice(0, MAX_TEXT_CHARS) : ''
+      const rawOcr = typeof result.text === 'string' ? result.text : ''
+      const nextText = characterLimit ? rawOcr.slice(0, characterLimit) : rawOcr
       if (!nextText.trim()) throw new Error('Screen OCR returned no readable text.')
       setText(nextText)
       showToast({ tone: 'ok', message: 'Screen text loaded into the script.' })
@@ -4756,10 +4779,10 @@ function App() {
       return
     }
 
-    if (overLimit) {
+    if (overLimit && characterLimit) {
       showToast({
         tone: 'warn',
-        message: `Text exceeds ${MAX_TEXT_CHARS} characters — the last ${text.length - MAX_TEXT_CHARS} characters will be dropped.`,
+        message: `Text exceeds ${characterLimit.toLocaleString()} characters — the last ${(text.length - characterLimit).toLocaleString()} characters will be dropped.`,
       })
     }
 
@@ -4988,7 +5011,7 @@ function App() {
       const article = new Readability(doc).parse()
       const textContent = (article?.textContent ?? '').replace(/\n{3,}/g, '\n\n').trim()
       if (!textContent) throw new Error('No readable text found')
-      const truncated = textContent.length > MAX_TEXT_CHARS
+      const truncated = Boolean(characterLimit && textContent.length > characterLimit)
       const title = shortUiLabel(article?.title ?? 'article')
       const document = createReaderDocument({ kind: 'article', title, text: textContent })
       setImportedSource({ text: textContent, document })
@@ -4996,7 +5019,7 @@ function App() {
       setImportUrlValue('')
       showToast(
         truncated
-          ? { tone: 'warn', message: `Imported "${title}" from ${formatArticleImportDestination(finalUrl)}${redirectCount > 0 ? ` after ${redirectCount} redirect${redirectCount === 1 ? '' : 's'}` : ''} — review cleanup before synthesis; the editor is trimmed to ${MAX_TEXT_CHARS} characters.` }
+          ? { tone: 'warn', message: `Imported "${title}" from ${formatArticleImportDestination(finalUrl)}${redirectCount > 0 ? ` after ${redirectCount} redirect${redirectCount === 1 ? '' : 's'}` : ''} — review cleanup before synthesis; the editor is trimmed to ${characterLimit?.toLocaleString()} characters.` }
           : { tone: 'ok', message: `Imported "${title}" from ${formatArticleImportDestination(finalUrl)}${redirectCount > 0 ? ` after ${redirectCount} redirect${redirectCount === 1 ? '' : 's'}` : ''} — review cleanup before synthesis.` },
       )
     } catch (err) {
@@ -5047,14 +5070,14 @@ function App() {
         onUnavailable: notifyShareUnavailable,
         onFile: (file) => importedFileHandlerRef.current?.(file) ?? notifyShareUnavailable(),
         onUrl: (url) => importFromUrl(url),
-        onText: (value) => setText(value.slice(0, MAX_TEXT_CHARS)),
+        onText: (value) => setText(characterLimit ? value.slice(0, characterLimit) : value),
       })).catch(notifyShareUnavailable)
     } else if (shareError) {
         showToast({ tone: 'warn', message: uiText(uiLocale, 'shareUnavailable') })
     } else if (sharedUrl) {
       void importFromUrl(sharedUrl)
     } else if (sharedText) {
-      setText(sharedText.slice(0, MAX_TEXT_CHARS))
+      setText(characterLimit ? sharedText.slice(0, characterLimit) : sharedText)
     }
     if (shareToken || shareError || sharedUrl || sharedText) {
       window.history.replaceState(null, '', window.location.pathname)
@@ -5201,7 +5224,7 @@ function App() {
         const chapterVoice = chapter ? mappingChapterVoice(chapter) : undefined
         const chapterVoiceMix = chapter ? mappingChapterVoiceMix(chapter) : undefined
         return splitNarratorText(chunk.text).map((segment) => ({
-          text: segment.text.slice(0, MAX_TEXT_CHARS),
+          text: characterLimit ? segment.text.slice(0, characterLimit) : segment.text,
           voice: segment.role === 'narration'
             ? chapterVoice ?? chapterVoiceMix?.[0]?.voiceId ?? voiceIdForNarratorRole('narration')
             : voiceIdForNarratorRole('dialogue'),
@@ -5216,7 +5239,7 @@ function App() {
         const chapter = mappedChapters[chunk.chapterIndex]
         const voiceMix = chapter ? mappingChapterVoiceMix(chapter) : undefined
         return {
-          text: chunk.text.slice(0, MAX_TEXT_CHARS),
+          text: characterLimit ? chunk.text.slice(0, characterLimit) : chunk.text,
           voice: chapter ? mappingChapterVoice(chapter) ?? voiceMix?.[0]?.voiceId : undefined,
           chapterTitle: chunk.title,
           chapterIndex: chunk.chapterIndex,
@@ -6185,14 +6208,15 @@ function App() {
         return
       }
 
-      const trimmed = imported.text.slice(0, MAX_TEXT_CHARS)
+      const trimmed = characterLimit ? imported.text.slice(0, characterLimit) : imported.text
+      const isTruncated = Boolean(characterLimit && imported.text.length > characterLimit)
       const importedDocument = createReaderDocument({ kind: imported.kind, title: imported.title, text: imported.text })
       setImportedSource({ text: imported.text, document: importedDocument })
       setReaderOpen(true)
       showToast({
-        tone: imported.text.length > MAX_TEXT_CHARS ? 'warn' : 'ok',
-        message: imported.text.length > MAX_TEXT_CHARS
-          ? `${fileLabel} imported from ${imported.kind.toUpperCase()} and trimmed to ${MAX_TEXT_CHARS} characters; review cleanup before synthesis.`
+        tone: isTruncated ? 'warn' : 'ok',
+        message: isTruncated
+          ? `${fileLabel} imported from ${imported.kind.toUpperCase()} and trimmed to ${characterLimit?.toLocaleString()} characters; review cleanup before synthesis.`
           : `${fileLabel} imported from ${imported.kind.toUpperCase()}; review cleanup before synthesis.`,
       })
       if (autoQueue) await queueCurrentText(trimmed, file.name.replace(/\.(?:pdf|docx)$/iu, ''), imported.kind)
@@ -6235,14 +6259,14 @@ function App() {
       const reader = new FileReader()
       reader.onload = () => {
         const raw = String(reader.result ?? '')
-        const truncated = raw.length > MAX_TEXT_CHARS
-        const trimmed = raw.slice(0, MAX_TEXT_CHARS)
+        const truncated = Boolean(characterLimit && raw.length > characterLimit)
+        const trimmed = characterLimit ? raw.slice(0, characterLimit) : raw
         const importedDocument = createReaderDocument({ kind: 'text', title: file.name.replace(/\.txt$/iu, ''), text: raw })
         setImportedSource({ text: raw, document: importedDocument })
         setReaderOpen(true)
         showToast(
           truncated
-            ? { tone: 'warn', message: `${fileLabel} truncated from ${raw.length} to ${MAX_TEXT_CHARS} characters; review cleanup before synthesis.` }
+            ? { tone: 'warn', message: `${fileLabel} truncated from ${raw.length.toLocaleString()} to ${characterLimit?.toLocaleString()} characters; review cleanup before synthesis.` }
             : { tone: 'ok', message: `${fileLabel} imported; review cleanup before synthesis.` },
         )
         if (autoQueue) {
@@ -6714,10 +6738,35 @@ function App() {
             <div className="editor-column">
               <div className="section-heading">
                 <h2 id="script-heading">Script</h2>
-                <span className={overLimit ? 'danger-text' : ''}>
-                  {text.length} / {MAX_TEXT_CHARS}
-                  {overLimit ? ` (${text.length - MAX_TEXT_CHARS} over)` : ''}
-                </span>
+                <div className="script-limit-indicator">
+                  <span className={overLimit ? 'danger-text' : ''}>
+                    {characterLimit !== null ? (
+                      <>
+                        {text.length.toLocaleString()} / {characterLimit.toLocaleString()}
+                        {overLimit ? ` (${(text.length - characterLimit).toLocaleString()} over)` : ''}
+                      </>
+                    ) : (
+                      <>{text.length.toLocaleString()} chars (Unlimited)</>
+                    )}
+                  </span>
+                  <select
+                    id="script-character-limit"
+                    aria-label="Character limit"
+                    className="character-limit-select"
+                    value={characterLimit === null ? 'unlimited' : String(characterLimit)}
+                    onChange={(event) => {
+                      const val = event.target.value === 'unlimited' ? null : Number(event.target.value)
+                      setCharacterLimit(val)
+                    }}
+                  >
+                    <option value="5000">5k limit</option>
+                    <option value="10000">10k limit</option>
+                    <option value="25000">25k limit</option>
+                    <option value="50000">50k limit</option>
+                    <option value="100000">100k limit</option>
+                    <option value="unlimited">Unlimited</option>
+                  </select>
+                </div>
               </div>
               <div className="editor-actions">
                 <button
@@ -8583,6 +8632,32 @@ function App() {
                     <small>Generate one audio file per non-empty line.</small>
                   </span>
                 </label>
+
+                <div className="limit-option-row">
+                  <label htmlFor="settings-character-limit" className="control-label">
+                    Character limit
+                  </label>
+                  <select
+                    id="settings-character-limit"
+                    value={characterLimit === null ? 'unlimited' : String(characterLimit)}
+                    onChange={(event) => {
+                      const val = event.target.value === 'unlimited' ? null : Number(event.target.value)
+                      setCharacterLimit(val)
+                    }}
+                  >
+                    <option value="5000">5,000 characters (Default)</option>
+                    <option value="10000">10,000 characters</option>
+                    <option value="25000">25,000 characters</option>
+                    <option value="50000">50,000 characters</option>
+                    <option value="100000">100,000 characters</option>
+                    <option value="unlimited">Unlimited (No limit)</option>
+                  </select>
+                  <small>
+                    {characterLimit === null
+                      ? 'No character limit. Synthesize or import full documents without truncation.'
+                      : `Limits text to ${characterLimit.toLocaleString()} characters during synthesis and import.`}
+                  </small>
+                </div>
 
                 <div className="cleanup-heading">
                   <span className="control-label">Text cleanup</span>

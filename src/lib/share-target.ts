@@ -167,10 +167,10 @@ export async function consumeShareTarget(
     if (metadata.file) {
       const fileResponse = await cache.match(fileRequest)
       if (!fileResponse) return null
-      const blob = await fileResponse.blob()
-      if (blob.size !== metadata.file.size) return null
-      const type = metadata.file.type || blob.type || 'application/octet-stream'
-      file = new File([blob], metadata.file.name, { type })
+      const buffer = await fileResponse.arrayBuffer()
+      if (buffer.byteLength !== metadata.file.size) return null
+      const type = metadata.file.type || fileResponse.headers.get('content-type') || 'application/octet-stream'
+      file = new File([buffer], metadata.file.name, { type })
       const fileIssue = validateShareTargetFileMetadata(file)
       if (fileIssue) return null
     }

@@ -16,7 +16,7 @@ import type { RvcClipProvenance } from './rvc.ts'
 export const PROVENANCE_SCHEMA_VERSION = 3 as const
 export const PROVENANCE_CUE_SCHEMA_VERSION = 1 as const
 const HASH_PATTERN = /^[a-f0-9]{64}$/iu
-const MAX_TEXT_CHARS = 5000
+const MAX_TEXT_CHARS = 500_000
 const MAX_STRING_CHARS = 300
 
 export type ProvenanceRuntimeTarget = 'web' | 'desktop'

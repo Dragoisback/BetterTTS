@@ -12,6 +12,35 @@ import {
 
 export { MAX_PRONUNCIATIONS, MAX_PRONUNCIATION_VALUE_CHARS, MAX_PRONUNCIATION_WORD_CHARS } from './pronunciations.ts'
 
+export const DEFAULT_CHARACTER_LIMIT = 5000
+export const CHARACTER_LIMIT_STORAGE_KEY = 'bettertts-character-limit'
+export const CHARACTER_LIMIT_OPTIONS = [
+  { value: 5000, label: '5,000 characters' },
+  { value: 10000, label: '10,000 characters' },
+  { value: 25000, label: '25,000 characters' },
+  { value: 50000, label: '50,000 characters' },
+  { value: 100000, label: '100,000 characters' },
+  { value: 0, label: 'Unlimited' },
+] as const
+
+export function parseCharacterLimitSetting(raw: string | null): number | null {
+  if (raw === null || raw === undefined || raw === '') return DEFAULT_CHARACTER_LIMIT
+  const trimmed = raw.trim().toLowerCase()
+  if (trimmed === 'unlimited' || trimmed === '0' || trimmed === 'none' || trimmed === 'null' || trimmed === 'infinity') {
+    return null
+  }
+  const parsed = Number(trimmed)
+  if (Number.isFinite(parsed) && parsed > 0 && Number.isSafeInteger(parsed)) {
+    return parsed
+  }
+  return DEFAULT_CHARACTER_LIMIT
+}
+
+export function serializeCharacterLimitSetting(limit: number | null): string {
+  if (limit === null || limit <= 0 || !Number.isFinite(limit)) return 'unlimited'
+  return String(Math.max(1, Math.floor(limit)))
+}
+
 export function parsePronunciationSetting(raw: string | null): Record<string, string> {
   const dictionary = parsePronunciationDictionary(raw)
   return Object.fromEntries(
