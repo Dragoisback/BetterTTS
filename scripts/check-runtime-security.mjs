@@ -87,11 +87,47 @@ function parseJsonOutput(result, label) {
   }
 }
 
+function readLockfile() {
+  const lockPath = resolve('package-lock.json')
+  if (!existsSync(lockPath)) {
+    throw new Error('package-lock.json is required to validate the production dependency graph.')
+  }
+  return JSON.parse(readFileSync(lockPath, 'utf8'))
+}
+
+// `npm ci` writes every lockfile entry that has no platform exclusion to
+// node_modules. Some optional packages (for example the WASM fallbacks pulled in
+// by `sharp` and `rolldown`) are platform-agnostic themselves but are only
+// reachable through platform-specific optional dependencies (`cpu: wasm32`,
+// `os: freebsd`) that are not installed on the current platform. On Linux/macOS/
+// Windows those leftovers are written to disk yet reported as "extraneous" by
+// `npm ls` because no installed package depends on them. They are optional
+// leftovers rather than an integrity problem, so we drop them while still
+// failing on genuine missing/invalid/non-optional extraneous dependencies.
+export function filterTolerableProblems(problems, lockfile, root = process.cwd()) {
+  const packages = lockfile?.packages ?? {}
+  const projectRoot = resolve(root)
+  return problems.filter((problem) => {
+    if (typeof problem !== 'string' || !problem.startsWith('extraneous: ')) return true
+    const rest = problem.slice('extraneous: '.length)
+    const separator = rest.indexOf(' ')
+    if (separator < 0) return true
+    const nodeModulesPath = resolve(root, rest.slice(separator + 1).trim())
+    const key = nodeModulesPath === projectRoot ? '' : nodeModulesPath.slice(projectRoot.length + 1).replaceAll('\\', '/')
+    const entry = key ? packages[key] : undefined
+    return !entry?.optional
+  })
+}
+
 function inspectDependencyGraph() {
   const result = runNpm(['ls', '--omit=dev', '--all', '--json'])
   const graph = parseJsonOutput(result, 'npm ls')
-  if (result.status !== 0 || graph.problems?.length) {
-    throw new Error(`Production dependency graph is invalid: ${(graph.problems ?? [result.stderr]).join('; ')}`)
+  const blockingProblems = filterTolerableProblems(graph.problems ?? [], readLockfile())
+  if (blockingProblems.length > 0) {
+    throw new Error(`Production dependency graph is invalid: ${blockingProblems.join('; ')}`)
+  }
+  if (result.status !== 0 && result.stderr?.trim()) {
+    throw new Error(`Production dependency graph check failed: ${result.stderr.trim()}`)
   }
 }
 
