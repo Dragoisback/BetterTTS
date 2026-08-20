@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **EPUB chapter browser.** A loaded EPUB now stays open beside the script editor instead of disappearing after the pre-queue mapping step. Selecting a chapter drops its **entire text into the script box**, ready for a direct render; Alt/Shift-click (or the Append mode toggle) adds it after the current script instead of replacing it. The panel searches chapter titles and body text, filters by ticked/unticked/generated, sorts by reading order, length, or title, ticks chapters in bulk (scoped to the current search when one is active), shows per-chapter character, word, and duration estimates, renders long books in pages of 120 rows, and tracks a book-level progress bar. Chapter mapping (rename, split, merge, reorder, per-chapter voices and blends) is now a second view of the same book rather than a separate one-shot step.
+- **Remembered workspace.** Engine, voice (with its synthesis locale), speed, per-line/stream/worker/word-timestamp/dialog/narrator/audio-cleanup ticks, output format, MP3 bitrate, loudness preset, pause length, the Advanced/System/Pronunciation disclosure panels, and every EPUB chapter-view control are restored on the next visit from one bounded, schema-validated local preference record. Unknown, malformed, or out-of-range values fall back to the shipped default, and a remembered engine or container the running build cannot offer falls back instead of leaving an unselectable control on screen.
+- **Per-book reading progress.** Ticked chapters, the open chapter, and already-generated chapters are remembered per book (identified by title, file name, and chapter sizes — never by chapter text) and restored when the same EPUB is imported again.
+
+### Changed
+- Direct renders started from a chapter mark that chapter as generated when they finish, and optional auto-advance loads the next ungenerated ticked chapter into the script box.
+- Added chapter shortcuts that stay clear of normal typing: `Alt + ↓` / `Alt + ↑` load the next/previous ticked chapter and `Alt + Enter` loads the next chapter that has not been generated yet.
+- The editor status bar names the open chapter and the book's generated/ticked totals, and the Queue action queues the chapter currently in the script box while the chapter browser owns whole-book queueing.
+- Queueing a mapped EPUB no longer discards the book, so the chapter browser remains available for direct renders afterwards.
+- The initial-shell raw budget now includes the remembered-preferences and chapter-browser contract (648,000 raw / 185,000 gzip ceiling); the chapter browser itself stays lazy and is declared under the optional-UI ownership boundary.
+
 ## v0.24.0 - 2026-08-09
 
 ### Security

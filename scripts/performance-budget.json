@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "shell": {
-    "maxRawBytes": 640000,
+    "maxRawBytes": 648000,
     "maxGzipBytes": 185000,
     "maxTimeToInteractiveMs": 5000,
     "maxInitialRequests": 8,
@@ -76,7 +76,7 @@
       { "name": "piper-runtime", "patterns": ["piper_plus"] },
       { "name": "onnx-web-runtime", "patterns": ["ort-"] },
       { "name": "audio-runtime", "patterns": ["lamejs", "SignalsmithStretch", "audio-", "wav", "encode"] },
-      { "name": "optional-ui-and-artifacts", "patterns": ["ReaderView", "MiniPlayer", "LibraryPanel", "EpubMapping", "Normalization", "SentenceRetake", "WebGpu", "AudioOutput", "DesktopIntegrations", "LongForm", "Quality", "archive-budget", "audiobook", "backup", "m4b", "media-overlays", "model-cache", "provenance", "queue-sentence", "generation-dispatcher", "text-normalization", "capabilities", "browser"] }
+      { "name": "optional-ui-and-artifacts", "patterns": ["ReaderView", "MiniPlayer", "LibraryPanel", "EpubMapping", "EpubChapter", "Normalization", "SentenceRetake", "WebGpu", "AudioOutput", "DesktopIntegrations", "LongForm", "Quality", "archive-budget", "audiobook", "backup", "m4b", "media-overlays", "model-cache", "provenance", "queue-sentence", "generation-dispatcher", "text-normalization", "capabilities", "browser"] }
     ]
   },
   "realEngine": {
