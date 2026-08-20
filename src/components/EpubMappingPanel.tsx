@@ -69,7 +69,7 @@ export function EpubMappingPanel({
         <span>Before queueing</span>
       </div>
       <p className="epub-mapping-intro">
-        Confirm the reading order, chapter names, and voice assignments. Excluded chapters stay available here but will not enter the queue or any export.
+        Confirm the reading order, chapter names, and voice assignments. Unticked chapters stay available in the chapter browser but will not enter the queue or any export.
       </p>
       <div className="epub-mapping-list">
         {chapters.map((chapter, index) => {
@@ -173,7 +173,7 @@ export function EpubMappingPanel({
         })}
       </div>
       <div className="epub-mapping-footer">
-        <button type="button" className="subtle-button" onClick={onCancel}>Keep reading</button>
+        <button type="button" className="subtle-button" onClick={onCancel}>Back to chapters</button>
         <span className="epub-mapping-footer-spacer" />
         <button type="button" className="subtle-button" onClick={onQueueDefaults}>Queue with defaults</button>
         <button type="button" className="primary-button" onClick={onQueue} disabled={includedCount === 0}>Queue mapped EPUB</button>

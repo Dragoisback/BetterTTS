@@ -32,3 +32,6 @@ ROADMAP.md
 *.njsproj
 *.sln
 *.sw?
+
+# Local EPUB fixture used for manual preview testing; never shipped or committed
+public/sample-book.epub

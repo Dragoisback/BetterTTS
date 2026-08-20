@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   Info,
+  Library,
   Loader2,
   Moon,
   FilePlus2,
@@ -101,6 +102,32 @@ import {
 } from './lib/encode.ts'
 import { buildEpubQueueChunks } from './lib/epub-queue.ts'
 import type { EpubMappingChapter } from './lib/epub-mapping.ts'
+import {
+  applyEpubBookProgress,
+  epubBookKey,
+  epubBookStorageKey,
+  excludedEpubChapterIds,
+  formatEstimatedDuration,
+  invertEpubChapterInclusion,
+  loadEpubBookProgress,
+  serializeEpubBookProgress,
+  setEpubChaptersIncluded,
+  stepEpubChapterId,
+  summarizeEpubBook,
+  toggleCompletedChapter,
+} from './lib/epub-library.ts'
+import {
+  DEFAULT_STUDIO_PREFERENCES,
+  preferredChoice,
+  readStudioPreferences,
+  serializeStudioPreferences,
+  STUDIO_PREFERENCES_STORAGE_KEY,
+  type EpubChapterFilter,
+  type EpubChapterSort,
+  type EpubLoadMode,
+  type EpubPanelMode,
+  type StudioPreferences,
+} from './lib/ui-preferences.ts'
 import { SerialTaskQueue } from './lib/serial-task-queue.ts'
 import { getPersistenceOutcome, writePersistentSetting } from './lib/persistence.ts'
 import { loadPortableBackup } from './lib/restore-recovery.ts'
@@ -306,6 +333,10 @@ const EpubMappingPanel = lazy(async () => {
   const module = await import('./components/EpubMappingPanel.tsx')
   return { default: module.EpubMappingPanel }
 })
+const EpubChapterPanel = lazy(async () => {
+  const module = await import('./components/EpubChapterPanel.tsx')
+  return { default: module.EpubChapterPanel }
+})
 const NormalizationPreview = lazy(async () => {
   const module = await import('./components/NormalizationPreview.tsx')
   return { default: module.NormalizationPreview }
@@ -460,11 +491,16 @@ type Toast = {
   }
 }
 
-type PendingEpubMapping = {
+type EpubBookSession = {
+  /** Stable per-book identity used to remember ticks and progress. */
+  key: string
   title: string
   fileName: string
   defaultChapters: EpubMappingChapter[]
   chapters: EpubMappingChapter[]
+  /** The chapter whose full text currently sits in the script box. */
+  selectedChapterId: string | null
+  completedIds: string[]
 }
 
 type EpubMappingApi = typeof import('./lib/epub-mapping.ts')
@@ -1561,14 +1597,26 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   }
 }
 
+/** Remembered studio selections, read once so the first paint is already correct. */
+function getInitialStudioPreferences(): StudioPreferences {
+  if (typeof window === 'undefined') return { ...DEFAULT_STUDIO_PREFERENCES }
+  try {
+    return readStudioPreferences(window.localStorage)
+  } catch {
+    return { ...DEFAULT_STUDIO_PREFERENCES }
+  }
+}
+
 function App() {
+  const [initialPreferences] = useState(getInitialStudioPreferences)
   const [mobileLifecycle, setMobileLifecycle] = useState<MobileLifecycleSnapshot>(() => readMobileLifecycleSnapshot())
   const [theme, setTheme] = useState<Theme>(getInitialTheme)
   const [activeNavSection, setActiveNavSection] = useState<NavSection>(getActiveNavSection)
   const [activeWorkspaceHash, setActiveWorkspaceHash] = useState<string>(() => (
     typeof window === 'undefined' ? '' : window.location.hash.replace(/^#/, '')
   ))
-  const [engine, setEngine] = useState<Engine>('kokoro')
+  // The prefs enum mirrors CapabilityEngineId; gated engines fall back to Kokoro below.
+  const [engine, setEngine] = useState<Engine>(() => initialPreferences.engine as Engine)
   const [uiLocale, setUiLocale] = useState<UiLocale>(() => {
     if (typeof window === 'undefined') return DEFAULT_UI_LOCALE
     try {
@@ -1577,8 +1625,10 @@ function App() {
       return DEFAULT_UI_LOCALE
     }
   })
-  const [synthesisLocale, setSynthesisLocale] = useState<KokoroLocale>('en-us')
-  const [voiceId, setVoiceId] = useState('af_heart')
+  const [voiceId, setVoiceId] = useState<string>(() => preferredChoice(initialPreferences.voiceId, VOICES.map((voice) => voice.id), 'af_heart'))
+  const [synthesisLocale, setSynthesisLocale] = useState<KokoroLocale>(() => kokoroLanguageForVoice(
+    preferredChoice(initialPreferences.voiceId, VOICES.map((voice) => voice.id), 'af_heart'),
+  ).id)
   const [supertonicVoiceId, setSupertonicVoiceId] = useState<SupertonicVoiceId>('F1')
   const [supertonicSteps, setSupertonicSteps] = useState(SUPERTONIC_DEFAULT_STEPS)
   const [kittenVoiceId, setKittenVoiceId] = useState<KittenVoiceId>('Bella')
@@ -1607,14 +1657,14 @@ function App() {
   const [qwenStatus, setQwenStatus] = useState<SidecarStatus | null>(null)
   const [qwenSetupBusy, setQwenSetupBusy] = useState(false)
   const [qwenSetupProgress, setQwenSetupProgress] = useState(0)
-  const [speed, setSpeed] = useState(1)
+  const [speed, setSpeed] = useState(() => initialPreferences.speed)
   const [listeningTrainer, setListeningTrainer] = useState<ListeningTrainerSettings>(() => {
     try {
       return parseListeningTrainerSetting(window.localStorage.getItem(LISTENING_TRAINER_STORAGE_KEY))
     } catch { return DEFAULT_LISTENING_TRAINER }
   })
-  const [separateLines, setSeparateLines] = useState(false)
-  const [streamPlay, setStreamPlay] = useState(true)
+  const [separateLines, setSeparateLines] = useState(() => initialPreferences.separateLines)
+  const [streamPlay, setStreamPlay] = useState(() => initialPreferences.streamPlay)
   const [qualityChecksEnabled, setQualityChecksEnabled] = useState(() => {
     try {
       return window.localStorage.getItem(QUALITY_CHECKS_STORAGE_KEY) === '1'
@@ -1622,10 +1672,10 @@ function App() {
       return false
     }
   })
-  const [audioFormat, setAudioFormat] = useState<AudioFormat>('wav')
-  const [mp3Bitrate, setMp3Bitrate] = useState(160)
-  const [useWorker, setUseWorker] = useState(true)
-  const [wordTimestamps, setWordTimestamps] = useState(false)
+  const [audioFormat, setAudioFormat] = useState<AudioFormat>(() => initialPreferences.audioFormat as AudioFormat)
+  const [mp3Bitrate, setMp3Bitrate] = useState(() => initialPreferences.mp3Bitrate)
+  const [useWorker, setUseWorker] = useState(() => initialPreferences.useWorker)
+  const [wordTimestamps, setWordTimestamps] = useState(() => initialPreferences.wordTimestamps)
   const [punctuationPauses, setPunctuationPauses] = useState<PunctuationPauseSettings>(() => {
     try {
       return parsePunctuationPauseSetting(window.localStorage.getItem('bettertts-punctuation-pauses'))
@@ -1646,7 +1696,7 @@ function App() {
   const [bgmVolume, setBgmVolume] = useState(0.15)
   const [bgmDuckEnabled, setBgmDuckEnabled] = useState(false)
   const [bgmDuckDepth, setBgmDuckDepth] = useState(0.65)
-  const [dialogMode, setDialogMode] = useState(false)
+  const [dialogMode, setDialogMode] = useState(() => initialPreferences.dialogMode)
   const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({})
   const [pronunciations, setPronunciations] = useState<PronunciationDictionary>(() => {
     try {
@@ -1672,14 +1722,21 @@ function App() {
   const [cleanupPreview, setCleanupPreview] = useState<CleanupPreviewState | null>(null)
   const [normalizationUndo, setNormalizationUndo] = useState<NormalizationUndoState | null>(null)
   const [readerOpen, setReaderOpen] = useState(false)
-  const [pendingEpubMapping, setPendingEpubMapping] = useState<PendingEpubMapping | null>(null)
+  const [epubBook, setEpubBook] = useState<EpubBookSession | null>(null)
+  const [epubPanelMode, setEpubPanelMode] = useState<EpubPanelMode>(() => initialPreferences.epubPanelMode)
+  const [epubPanelOpen, setEpubPanelOpen] = useState(() => initialPreferences.epubPanelOpen)
+  const [epubChapterFilter, setEpubChapterFilter] = useState<EpubChapterFilter>(() => initialPreferences.epubChapterFilter)
+  const [epubChapterSort, setEpubChapterSort] = useState<EpubChapterSort>(() => initialPreferences.epubChapterSort)
+  const [epubLoadMode, setEpubLoadMode] = useState<EpubLoadMode>(() => initialPreferences.epubLoadMode)
+  const [epubAutoAdvance, setEpubAutoAdvance] = useState(() => initialPreferences.epubAutoAdvance)
+  const [epubShowPreview, setEpubShowPreview] = useState(() => initialPreferences.epubShowPreview)
   const [results, setResults] = useState<AudioResult[]>([])
   const [activeOutputId, setActiveOutputId] = useState<string | null>(null)
   const [zipUrl, setZipUrl] = useState<string | null>(null)
   const [zipName, setZipName] = useState('bettertts-audio.zip')
   const [toast, setToast] = useState<Toast | null>(null)
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const [pauseDuration, setPauseDuration] = useState(1)
+  const [pauseDuration, setPauseDuration] = useState(() => initialPreferences.pauseDuration)
   const [forceWasm, setForceWasm] = useState(() => {
     try {
       return window.localStorage.getItem('bettertts-backend') === 'wasm'
@@ -1717,22 +1774,22 @@ function App() {
   const [projectDirty, setProjectDirty] = useState(false)
   const [projectSearch, setProjectSearch] = useState('')
   const [ffmpegStatus, setFfmpegStatus] = useState<{ available: boolean; version?: string; message?: string } | null>(null)
-  const [audioCleanupEnabled, setAudioCleanupEnabled] = useState(false)
+  const [audioCleanupEnabled, setAudioCleanupEnabled] = useState(() => initialPreferences.audioCleanupEnabled)
   const [openAiTtsPort, setOpenAiTtsPort] = useState(getInitialOpenAiTtsPort)
   const [openAiTtsStatus, setOpenAiTtsStatus] = useState<OpenAiTtsServerStatus | null>(null)
   const [openAiTtsAction, setOpenAiTtsAction] = useState<'start' | 'stop' | 'refresh' | null>(null)
   const [desktopIntegrationStatus, setDesktopIntegrationStatus] = useState<DesktopIntegrationStatus | null>(null)
   const [desktopIntegrationAction, setDesktopIntegrationAction] = useState<DesktopIntegrationKind | 'folder' | null>(null)
-  const [loudnessPreset, setLoudnessPreset] = useState<LoudnessPresetId>('off')
+  const [loudnessPreset, setLoudnessPreset] = useState<LoudnessPresetId>(() => initialPreferences.loudnessPreset as LoudnessPresetId)
   const [m4bCoverFile, setM4bCoverFile] = useState<File | null>(null)
   const [pendingBackup, setPendingBackup] = useState<{ file: File; preview: BackupPreview } | null>(null)
   const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([])
   const [browserVoiceUri, setBrowserVoiceUri] = useState('')
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [showSystemTools, setShowSystemTools] = useState(false)
-  const [showPronunciations, setShowPronunciations] = useState(false)
-  const [narratorMode, setNarratorMode] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(() => initialPreferences.showAdvanced)
+  const [showSystemTools, setShowSystemTools] = useState(() => initialPreferences.showSystemTools)
+  const [showPronunciations, setShowPronunciations] = useState(() => initialPreferences.showPronunciations)
+  const [narratorMode, setNarratorMode] = useState(() => initialPreferences.narratorMode)
   const [dialogueVoiceId, setDialogueVoiceId] = useState('af_bella')
   const [dialogueSupertonicVoiceId, setDialogueSupertonicVoiceId] = useState<SupertonicVoiceId>('M1')
   const [dialogueKittenVoiceId, setDialogueKittenVoiceId] = useState<KittenVoiceId>('Jasper')
@@ -1885,6 +1942,44 @@ function App() {
   const { rememberUrl, rememberCaptionUrl, clearOutputUrls, clearCaptionUrls } = useObjectUrls()
   const importedFileHandlerRef = useRef<((file: File, autoQueue?: boolean) => Promise<void>) | null>(null)
   const epubMappingApiRef = useRef<EpubMappingApi | null>(null)
+  /** Async callbacks (generation completion, shortcuts) read the live book here. */
+  const epubBookRef = useRef<EpubBookSession | null>(null)
+
+  useEffect(() => {
+    epubBookRef.current = epubBook
+  }, [epubBook])
+
+  // Ticked chapters, the open chapter, and generated chapters survive a reload.
+  useEffect(() => {
+    if (!epubBook?.key) return
+    persistSetting(epubBookStorageKey(epubBook.key), serializeEpubBookProgress({
+      excludedIds: excludedEpubChapterIds(epubBook.chapters),
+      completedIds: epubBook.completedIds,
+      selectedChapterId: epubBook.selectedChapterId,
+    }))
+  }, [epubBook])
+
+  // Alt-based chapter shortcuts stay clear of normal typing in the script box.
+  useEffect(() => {
+    if (!epubBook) return
+    const onChapterShortcut = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.repeat) return
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        stepEpubChapter(1)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        stepEpubChapter(-1)
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        stepEpubChapter(1, { skipCompleted: true })
+      }
+    }
+    window.addEventListener('keydown', onChapterShortcut)
+    return () => window.removeEventListener('keydown', onChapterShortcut)
+  }, [epubBook, epubLoadMode, isGenerating])
+
+
 
   async function loadEpubMappingApi(): Promise<EpubMappingApi> {
     if (epubMappingApiRef.current) return epubMappingApiRef.current
@@ -1918,6 +2013,15 @@ function App() {
   const speedMax = engine === 'supertonic' ? 1.2 : engine === 'kitten' ? 2 : 1.5
   const usableText = characterLimit ? text.slice(0, characterLimit) : text
   const overLimit = characterLimit !== null && text.length > characterLimit
+  const activeEpubChapter = useMemo(
+    () => epubBook?.chapters.find((chapter) => chapter.id === epubBook.selectedChapterId) ?? null,
+    [epubBook],
+  )
+  const activeEpubChapterTitle = activeEpubChapter?.title.trim() || undefined
+  const epubBookSummary = useMemo(
+    () => (epubBook ? summarizeEpubBook(epubBook.chapters, { completedIds: epubBook.completedIds, speed }) : null),
+    [epubBook, speed],
+  )
 
   function refreshCleanupPreview(
     sourceText: string,
@@ -2049,7 +2153,7 @@ function App() {
   function setImportedSource(source: { text: string; document: ReaderDocument }) {
     const editorText = characterLimit ? source.text.slice(0, characterLimit) : source.text
     setText(editorText)
-    setPendingEpubMapping(null)
+    setEpubBook(null)
     setReaderDocument(source.document)
     setImportedText(source)
     refreshCleanupPreview(editorText, cleanup, punctuationPauses, source.document.kind, true)
@@ -2584,6 +2688,82 @@ function App() {
   useEffect(() => {
     persistSetting(QUALITY_CHECKS_STORAGE_KEY, qualityChecksEnabled ? '1' : '0')
   }, [qualityChecksEnabled])
+
+  // Every remembered selection and tick lives in one bounded, validated blob so
+  // reopening the studio restores the exact workspace the reader left behind.
+  useEffect(() => {
+    persistSetting(STUDIO_PREFERENCES_STORAGE_KEY, serializeStudioPreferences({
+      engine,
+      voiceId,
+      speed,
+      separateLines,
+      streamPlay,
+      useWorker,
+      wordTimestamps,
+      dialogMode,
+      narratorMode,
+      audioCleanupEnabled,
+      audioFormat,
+      mp3Bitrate,
+      loudnessPreset,
+      pauseDuration,
+      showAdvanced,
+      showSystemTools,
+      showPronunciations,
+      epubPanelMode,
+      epubPanelOpen,
+      epubChapterFilter,
+      epubChapterSort,
+      epubLoadMode,
+      epubAutoAdvance,
+      epubShowPreview,
+    }))
+  }, [
+    engine,
+    voiceId,
+    speed,
+    separateLines,
+    streamPlay,
+    useWorker,
+    wordTimestamps,
+    dialogMode,
+    narratorMode,
+    audioCleanupEnabled,
+    audioFormat,
+    mp3Bitrate,
+    loudnessPreset,
+    pauseDuration,
+    showAdvanced,
+    showSystemTools,
+    showPronunciations,
+    epubPanelMode,
+    epubPanelOpen,
+    epubChapterFilter,
+    epubChapterSort,
+    epubLoadMode,
+    epubAutoAdvance,
+    epubShowPreview,
+  ])
+
+  // A remembered engine or container that this build cannot offer falls back
+  // instead of leaving an unselectable control on screen.
+  useEffect(() => {
+    if (!desktopSidecar && engine === 'qwen') setEngine('kokoro')
+  }, [desktopSidecar, engine])
+
+  useEffect(() => {
+    const available = audioFormat === 'wav'
+      || audioFormat === 'mp3'
+      || (audioFormat === 'opus' && (Boolean(desktopFfmpeg) || opusSupported()))
+      || ((audioFormat === 'flac' || audioFormat === 'm4b') && Boolean(desktopFfmpeg))
+    if (!available) setAudioFormat('wav')
+  }, [audioFormat, desktopFfmpeg])
+
+  // Engines advertise different speed ranges, so a remembered rate is clamped
+  // into the active engine's window instead of silently over-driving it.
+  useEffect(() => {
+    setSpeed((current) => Math.min(speedMax, Math.max(speedMin, current)))
+  }, [speedMin, speedMax])
 
   useEffect(() => {
     persistSetting(EXPERIMENTAL_PIPER_STORAGE_KEY, experimentalPiperEnabled ? '1' : '0')
@@ -3542,11 +3722,19 @@ function App() {
     })
   }
 
+  function closeEpubBook() {
+    const book = epubBookRef.current
+    if (!book) return
+    setEpubBook(null)
+    showToast({ tone: 'ok', message: `Closed "${shortUiLabel(book.title, 48)}". Your chapter selection is remembered for the next import.` })
+  }
+
   function startNewScript() {
     if (!text || isGenerating || isImportingFile || importingUrl) return
     const previousText = text
     setText('')
-    setPendingEpubMapping(null)
+    // The loaded book survives a cleared script; use Close book to drop it.
+    setEpubBook((current) => (current ? { ...current, selectedChapterId: null } : null))
     setImportedText(null)
     closeCleanupPreview()
     setNormalizationUndo(null)
@@ -4804,6 +4992,7 @@ function App() {
       : null
     generatingRef.current = true
     setIsGenerating(true)
+    let renderedFully = false
 
     try {
       if (effectiveNarrator) {
@@ -4825,6 +5014,7 @@ function App() {
       } else {
         await generateBrowser(chunks)
       }
+      renderedFully = !abortRef.current
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         setStatus('Cancelled')
@@ -4860,6 +5050,7 @@ function App() {
           recordDiagnosticEvent('warn', error, 'benchmark.persist')
         }
       }
+      if (renderedFully) completeActiveEpubChapter()
     }
   }
 
@@ -5168,22 +5359,114 @@ function App() {
     showToast({ tone: 'ok', message: `Queued "${job.title}" — ${job.chunks.length} chunks.` })
   }
 
-  function updatePendingEpubMapping(update: (api: EpubMappingApi, chapters: readonly EpubMappingChapter[]) => EpubMappingChapter[]) {
-    if (!pendingEpubMapping) return
+  function updateEpubBookChapters(update: (api: EpubMappingApi, chapters: readonly EpubMappingChapter[]) => EpubMappingChapter[]) {
+    if (!epubBook) return
     const api = epubMappingApiRef.current
     if (!api) return
-    const chapters = update(api, pendingEpubMapping.chapters)
+    const chapters = update(api, epubBook.chapters)
     const nextReader = createReaderDocument({
       kind: 'epub',
-      title: pendingEpubMapping.title,
+      title: epubBook.title,
       chapters: chapters
         .filter((chapter) => chapter.included && chapter.text.trim())
         .map((chapter) => ({ title: chapter.title, text: chapter.text })),
     })
-    setPendingEpubMapping({ ...pendingEpubMapping, chapters })
+    setEpubBook({
+      ...epubBook,
+      chapters,
+      selectedChapterId: chapters.some((chapter) => chapter.id === epubBook.selectedChapterId) ? epubBook.selectedChapterId : null,
+    })
     setReaderDocument(nextReader)
     setReaderOpen(true)
   }
+
+  /** Ticks and bulk selection never rebuild the reader document — only content edits do. */
+  function applyEpubChapterSelection(chapters: EpubMappingChapter[]) {
+    if (!epubBook) return
+    setEpubBook({ ...epubBook, chapters })
+  }
+
+  function chapterScriptText(chapter: EpubMappingChapter): string {
+    const chapterText = chapter.text.trim()
+    return characterLimit && chapterText.length > characterLimit ? chapterText.slice(0, characterLimit) : chapterText
+  }
+
+  /** Puts the whole chapter in the script box so it can be generated directly. */
+  function loadEpubChapter(chapterId: string, mode: EpubLoadMode = epubLoadMode) {
+    const book = epubBookRef.current
+    if (!book || isGenerating) return
+    const chapter = book.chapters.find((candidate) => candidate.id === chapterId)
+    if (!chapter) return
+    const chapterText = chapter.text.trim()
+    if (!chapterText) {
+      showToast({ tone: 'warn', message: `"${shortUiLabel(chapter.title, 48)}" has no readable text.` })
+      return
+    }
+    const script = chapterScriptText(chapter)
+    const truncated = script.length < chapterText.length
+    setText((current) => (mode === 'append' && current.trim() ? `${current.trimEnd()}\n\n${script}` : script))
+    setEpubBook({ ...book, selectedChapterId: chapterId })
+    setImportedText(null)
+    closeCleanupPreview()
+    setNormalizationUndo(null)
+    showToast({
+      tone: truncated ? 'warn' : 'ok',
+      message: truncated
+        ? `"${shortUiLabel(chapter.title, 48)}" trimmed to ${characterLimit?.toLocaleString()} characters — raise the limit to keep the full chapter.`
+        : `${mode === 'append' ? 'Appended' : 'Loaded'} "${shortUiLabel(chapter.title, 48)}" — ${chapter.text.length.toLocaleString()} characters, ~${formatEstimatedDuration(estimatedChapterSeconds(chapter))} of audio.`,
+    })
+  }
+
+  function estimatedChapterSeconds(chapter: EpubMappingChapter): number {
+    return summarizeEpubBook([{ ...chapter, included: true }], { speed }).includedSeconds
+  }
+
+  function stepEpubChapter(delta: 1 | -1, options: { skipCompleted?: boolean } = {}) {
+    const book = epubBookRef.current
+    if (!book) return
+    const nextId = stepEpubChapterId(book.chapters, book.selectedChapterId, delta, {
+      includedOnly: true,
+      skipCompleted: options.skipCompleted,
+      completedIds: book.completedIds,
+    })
+    if (!nextId) {
+      showToast({
+        tone: 'warn',
+        message: options.skipCompleted
+          ? 'Every ticked chapter after this one is already generated.'
+          : delta === 1 ? 'This is the last ticked chapter.' : 'This is the first ticked chapter.',
+      })
+      return
+    }
+    loadEpubChapter(nextId, 'replace')
+  }
+
+  function setEpubChapterCompleted(chapterId: string, completed: boolean) {
+    const book = epubBookRef.current
+    if (!book) return
+    setEpubBook({ ...book, completedIds: toggleCompletedChapter(book.completedIds, chapterId, completed) })
+  }
+
+  /** After a successful direct render, tick the chapter off and optionally queue up the next one. */
+  function completeActiveEpubChapter() {
+    const book = epubBookRef.current
+    if (!book?.selectedChapterId) return
+    const completedIds = toggleCompletedChapter(book.completedIds, book.selectedChapterId, true)
+    const nextId = epubAutoAdvance
+      ? stepEpubChapterId(book.chapters, book.selectedChapterId, 1, { includedOnly: true, skipCompleted: true, completedIds })
+      : null
+    const nextChapter = nextId ? book.chapters.find((chapter) => chapter.id === nextId) : undefined
+    setEpubBook({ ...book, completedIds, selectedChapterId: nextChapter?.id ?? book.selectedChapterId })
+    if (!nextChapter) {
+      if (epubAutoAdvance) showToast({ tone: 'ok', message: 'Every ticked chapter has been generated.' })
+      return
+    }
+    setText(chapterScriptText(nextChapter))
+    closeCleanupPreview()
+    setNormalizationUndo(null)
+    showToast({ tone: 'ok', message: `Next up: "${shortUiLabel(nextChapter.title, 48)}" is loaded in the script box.` })
+  }
+
 
   function mappingChapterVoice(chapter: EpubMappingChapter): string | undefined {
     const voice = chapter.voice?.trim()
@@ -5199,8 +5482,8 @@ function App() {
     return entries.length >= 2 ? entries : undefined
   }
 
-  async function queueEpubMapping(useDefaults = false, pendingOverride?: PendingEpubMapping): Promise<boolean> {
-    const pending = pendingOverride ?? pendingEpubMapping
+  async function queueEpubMapping(useDefaults = false, pendingOverride?: EpubBookSession): Promise<boolean> {
+    const pending = pendingOverride ?? epubBook
     if (!pending) return false
     const mapping = useDefaults ? pending.defaultChapters : pending.chapters
     const mappedChapters = mapping.filter((chapter) => chapter.included && chapter.text.trim())
@@ -5267,9 +5550,7 @@ function App() {
       return false
     }
     setQueueJobs((prev) => [job, ...prev])
-    setPendingEpubMapping(null)
     setReaderDocument(reader)
-    setReaderOpen(true)
     const skipped = mapping.filter((chapter) => !chapter.included || !chapter.text.trim()).length
     showToast({
       tone: 'ok',
@@ -6156,20 +6437,47 @@ function App() {
         voice: voiceIdForNarratorRole('narration'),
         voiceMix: defaultMix,
       })
-      const pending: PendingEpubMapping = {
+      const bookKey = epubBookKey({ title: imported.title, fileName: file.name, chapters })
+      let storage: Storage | null = null
+      try {
+        storage = window.localStorage
+      } catch {
+        // Private modes reject storage access; the book simply starts fresh.
+      }
+      const progress = loadEpubBookProgress(bookKey, storage)
+      const restoredChapters = applyEpubBookProgress(mapping, progress)
+      const knownIds = new Set(restoredChapters.map((chapter) => chapter.id))
+      const completedIds = progress.completedIds.filter((id) => knownIds.has(id))
+      const openChapter = restoredChapters.find((chapter) => chapter.id === progress.selectedChapterId)
+        ?? restoredChapters.find((chapter) => chapter.included && chapter.text.trim())
+        ?? restoredChapters[0]
+      const pending: EpubBookSession = {
+        key: bookKey,
         title: imported.title,
         fileName: file.name,
         defaultChapters: mapping.map((chapter) => ({ ...chapter, voiceMix: chapter.voiceMix?.map((entry) => ({ ...entry })) })),
-        chapters: mapping,
+        chapters: restoredChapters,
+        selectedChapterId: openChapter?.id ?? null,
+        completedIds,
       }
-      setPendingEpubMapping(pending)
+      setEpubBook(pending)
+      epubBookRef.current = pending
+      setEpubPanelOpen(true)
+      setEpubPanelMode('chapters')
       setReaderDocument(importedReader)
       setImportedText(null)
       closeCleanupPreview()
-      setReaderOpen(true)
+      setNormalizationUndo(null)
+      setReaderOpen(false)
+      // Selecting a chapter puts its whole text in the script box, so the first
+      // readable chapter is loaded immediately after import.
+      if (openChapter) setText(chapterScriptText(openChapter))
+      const resumed = progress.excludedIds.length > 0 || completedIds.length > 0
       showToast({
         tone: 'ok',
-        message: `Imported "${shortUiLabel(file.name.replace(/\.epub$/iu, ''))}" — ${chapters.length} chapters. Review the mapping before queueing.`,
+        message: `Imported "${shortUiLabel(file.name.replace(/\.epub$/iu, ''))}" — ${chapters.length} chapters.${
+          openChapter ? ` "${shortUiLabel(openChapter.title, 40)}" is ready in the script box.` : ''
+        }${resumed ? ' Your previous chapter selection was restored.' : ''}`,
       })
       if (autoQueue) await queueEpubMapping(true, pending)
     } catch (err) {
@@ -6701,37 +7009,70 @@ function App() {
                 />
               </Suspense>
             ) : null}
-            {pendingEpubMapping ? (
+            {epubBook && epubPanelOpen && epubPanelMode === 'chapters' ? (
+              <Suspense fallback={<section className="epub-chapter-panel" aria-live="polite">Loading chapters…</section>}>
+                <EpubChapterPanel
+                  title={epubBook.title}
+                  fileName={epubBook.fileName}
+                  chapters={epubBook.chapters}
+                  completedIds={epubBook.completedIds}
+                  selectedChapterId={epubBook.selectedChapterId}
+                  speed={speed}
+                  busy={isGenerating}
+                  filter={epubChapterFilter}
+                  sort={epubChapterSort}
+                  loadMode={epubLoadMode}
+                  autoAdvance={epubAutoAdvance}
+                  showPreview={epubShowPreview}
+                  onFilterChange={setEpubChapterFilter}
+                  onSortChange={setEpubChapterSort}
+                  onLoadModeChange={setEpubLoadMode}
+                  onAutoAdvanceChange={setEpubAutoAdvance}
+                  onShowPreviewChange={setEpubShowPreview}
+                  onLoadChapter={(chapterId, mode) => loadEpubChapter(chapterId, mode)}
+                  onToggleInclude={(chapterId, included) => applyEpubChapterSelection(setEpubChaptersIncluded(epubBook.chapters, included, [chapterId]))}
+                  onToggleCompleted={setEpubChapterCompleted}
+                  onBulkInclude={(included, chapterIds) => applyEpubChapterSelection(setEpubChaptersIncluded(epubBook.chapters, included, chapterIds))}
+                  onInvertInclude={(chapterIds) => applyEpubChapterSelection(invertEpubChapterInclusion(epubBook.chapters, chapterIds))}
+                  onStepChapter={(delta) => stepEpubChapter(delta)}
+                  onQueueSelection={() => void queueEpubMapping()}
+                  onOpenMapping={() => setEpubPanelMode('mapping')}
+                  onClose={() => setEpubPanelOpen(false)}
+                  onCloseBook={closeEpubBook}
+                />
+              </Suspense>
+            ) : null}
+            {epubBook && epubPanelOpen && epubPanelMode === 'mapping' ? (
               <Suspense fallback={<section className="epub-mapping-panel" aria-live="polite">Loading chapter mapping…</section>}>
                 <EpubMappingPanel
-                  title={pendingEpubMapping.title}
-                  chapters={pendingEpubMapping.chapters}
+                  title={epubBook.title}
+                  chapters={epubBook.chapters}
                   defaultVoiceLabel={activeVoiceName}
                   voiceOptions={epubMappingVoiceOptions}
                   blendVoiceOptions={blendableVoices.map((voice) => ({ id: voice.id, name: voice.name, gender: voice.gender }))}
                   defaultMix={voiceMixEntries}
                   supportsVoice={epubMappingSupportsVoice}
                   supportsBlend={epubMappingSupportsBlend}
-                  onRename={(chapterId, chapterTitle) => updatePendingEpubMapping((api, chapters) => api.renameEpubChapter(chapters, chapterId, chapterTitle))}
-                  onInclude={(chapterId, included) => updatePendingEpubMapping((api, chapters) => api.setEpubChapterIncluded(chapters, chapterId, included))}
-                  onVoice={(chapterId, voice) => updatePendingEpubMapping((api, chapters) => api.setEpubChapterVoice(chapters, chapterId, voice))}
-                  onBlend={(chapterId, enabled) => updatePendingEpubMapping((api, chapters) => {
+                  onRename={(chapterId, chapterTitle) => updateEpubBookChapters((api, chapters) => api.renameEpubChapter(chapters, chapterId, chapterTitle))}
+                  onInclude={(chapterId, included) => updateEpubBookChapters((api, chapters) => api.setEpubChapterIncluded(chapters, chapterId, included))}
+                  onVoice={(chapterId, voice) => updateEpubBookChapters((api, chapters) => api.setEpubChapterVoice(chapters, chapterId, voice))}
+                  onBlend={(chapterId, enabled) => updateEpubBookChapters((api, chapters) => {
                     const chapter = chapters.find((candidate) => candidate.id === chapterId)
                     const nextMix = enabled
                       ? chapter?.voiceMix ?? voiceMixEntries.map((entry) => ({ voiceId: entry.voiceId, weight: entry.weight }))
                       : undefined
                     return api.setEpubChapterVoiceMix(chapters, chapterId, nextMix)
                   })}
-                  onMixVoice={(chapterId, entryIndex, voiceId) => updatePendingEpubMapping((api, chapters) => api.updateEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex, { voiceId }))}
-                  onMixWeight={(chapterId, entryIndex, weight) => updatePendingEpubMapping((api, chapters) => api.updateEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex, { weight }))}
-                  onAddMix={(chapterId) => updatePendingEpubMapping((api, chapters) => api.addEpubChapterVoiceMixEntry(chapters, chapterId, { voiceId: blendableVoices[0]?.id ?? 'af_heart', weight: 1 }))}
-                  onRemoveMix={(chapterId, entryIndex) => updatePendingEpubMapping((api, chapters) => api.removeEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex))}
-                  onSplit={(chapterId) => updatePendingEpubMapping((api, chapters) => api.splitEpubChapter(chapters, chapterId))}
-                  onMerge={(chapterId) => updatePendingEpubMapping((api, chapters) => api.mergeEpubChapterWithNext(chapters, chapterId))}
-                  onMove={(chapterId, delta) => updatePendingEpubMapping((api, chapters) => api.reorderEpubChapter(chapters, chapterId, delta))}
+                  onMixVoice={(chapterId, entryIndex, voiceId) => updateEpubBookChapters((api, chapters) => api.updateEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex, { voiceId }))}
+                  onMixWeight={(chapterId, entryIndex, weight) => updateEpubBookChapters((api, chapters) => api.updateEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex, { weight }))}
+                  onAddMix={(chapterId) => updateEpubBookChapters((api, chapters) => api.addEpubChapterVoiceMixEntry(chapters, chapterId, { voiceId: blendableVoices[0]?.id ?? 'af_heart', weight: 1 }))}
+                  onRemoveMix={(chapterId, entryIndex) => updateEpubBookChapters((api, chapters) => api.removeEpubChapterVoiceMixEntry(chapters, chapterId, entryIndex))}
+                  onSplit={(chapterId) => updateEpubBookChapters((api, chapters) => api.splitEpubChapter(chapters, chapterId))}
+                  onMerge={(chapterId) => updateEpubBookChapters((api, chapters) => api.mergeEpubChapterWithNext(chapters, chapterId))}
+                  onMove={(chapterId, delta) => updateEpubBookChapters((api, chapters) => api.reorderEpubChapter(chapters, chapterId, delta))}
                   onQueue={() => void queueEpubMapping()}
                   onQueueDefaults={() => void queueEpubMapping(true)}
-                  onCancel={() => setPendingEpubMapping(null)}
+                  onCancel={() => setEpubPanelMode('chapters')}
                 />
               </Suspense>
             ) : null}
@@ -6800,6 +7141,20 @@ function App() {
                   onChange={handleFileUpload}
                   hidden
                 />
+                {epubBook ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEpubPanelMode('chapters')
+                      setEpubPanelOpen((current) => !current)
+                    }}
+                    aria-pressed={epubPanelOpen}
+                    title="Browse the loaded EPUB and drop a whole chapter into the script box"
+                  >
+                    <Library size={16} aria-hidden="true" />
+                    {epubPanelOpen ? 'Hide chapters' : `Chapters (${epubBook.chapters.length.toLocaleString()})`}
+                  </button>
+                ) : null}
                 {readerDocument ? (
                   <button type="button" onClick={() => setReaderOpen((current) => !current)} aria-pressed={readerOpen}>
                     <BookOpen size={16} aria-hidden="true" />
@@ -6882,6 +7237,11 @@ function App() {
                 <span>{lineCount} lines</span>
                 <span>{editorModeLabel}</span>
                 <span>{cleanupSummary}</span>
+                {activeEpubChapter && epubBookSummary ? (
+                  <span className="editor-chapter-status">
+                    {shortUiLabel(activeEpubChapter.title, 40)} · chapter {epubBook ? epubBook.chapters.indexOf(activeEpubChapter) + 1 : 0} of {epubBook?.chapters.length ?? 0} · {epubBookSummary.completed}/{epubBookSummary.included} generated
+                  </span>
+                ) : null}
               </div>
               {cleanupPreview ? (
                 <Suspense fallback={<section className="normalization-preview" aria-label="Text normalization preview">Loading preview…</section>}>
@@ -9097,11 +9457,13 @@ function App() {
               <button
               type="button"
               className="secondary-action"
-                onClick={() => void (pendingEpubMapping ? queueEpubMapping() : queueCurrentText())}
+                onClick={() => void queueCurrentText(undefined, activeEpubChapterTitle)}
                 disabled={isGenerating || isImportingFile || importingUrl || queueDisabledReason !== null}
                 title={isImportingFile || importingUrl
                   ? 'Finish or cancel the import before creating a queue job.'
-                  : queueDisabledReason ?? (pendingEpubMapping ? 'Queue the reviewed EPUB mapping for file export.' : 'Queue current text for file export.')}
+                  : queueDisabledReason ?? (activeEpubChapterTitle
+                    ? `Queue "${activeEpubChapterTitle}" for file export. Use the chapter browser to queue the whole book.`
+                    : 'Queue current text for file export.')}
               >
                 <FileText size={16} aria-hidden="true" />
                 Queue

@@ -5,14 +5,14 @@
 [![Platform](https://img.shields.io/badge/platform-Web%20%7C%20Windows-24292f.svg)](https://sysadmindoc.github.io/BetterTTS/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178c6.svg)](#)
 [![React](https://img.shields.io/badge/React-19-61dafb.svg)](#)
-[![Tests](https://img.shields.io/badge/tests-644%20passing-53d889.svg)](#)
+[![Tests](https://img.shields.io/badge/tests-670%20passing-53d889.svg)](#)
 
 <!-- BEGIN BETTERTTS CAPABILITIES -->
 - **Application:** BetterTTS v0.24.0 · Web + Windows
 - **Engines:** Kokoro local, Supertonic, KittenTTS, Chatterbox (experimental), Piper-plus, MeloTTS, Qwen3-TTS (experimental), Browser
 - **Queue:** resumable jobs for Kokoro local, Supertonic, KittenTTS, Piper-plus, MeloTTS
 - **Exports:** WAV, MP3, OPUS, FLAC, M4B audio · SRT, VTT, ASS captions
-- **Tests:** 644 tests across 108 test files
+- **Tests:** 670 tests across 111 test files
 - **Runtime licenses:** 21 direct package rows validated by `npm run license:runtime`
 - **Model licenses:** Kokoro 82M (Apache-2.0); Sherpa Kokoro int8 pack (Apache-2.0); Supertonic ONNX model (OpenRAIL); KittenTTS model (Apache-2.0); Chatterbox ONNX models (MIT); Chatterbox multilingual ONNX model (MIT); Piper-plus Tsukuyomi-chan (MIT); Sherpa Piper Cori pack (Public-Domain); MeloTTS model (MIT); Sherpa MeloTTS pack (MIT); Qwen3-TTS model (Apache-2.0); Browser voices (Device-managed)
 <!-- END BETTERTTS CAPABILITIES -->
@@ -86,6 +86,7 @@ Every cloud TTS service gates you behind signups, character limits, and paid tie
 ### Export & Output
 - **WAV** (lossless), **MP3** (96/128/160 kbps), **Opus/WebM**, and **chaptered M4B audiobook** export with AAC capability preflight
 - **EPUB3 Media Overlays** — completed EPUB queue jobs export text, SMIL timing, synchronized audio, and active highlight classes; WAV queue audio is normalized to EPUB-compatible MP3
+- **EPUB chapter browser** — a loaded book stays open beside the script: search titles and body text, filter by ticked/unticked/generated, sort by reading order or length, tick chapters in bulk, and select any chapter to drop its **whole text into the script box** for a direct render; per-chapter character, word, and duration estimates plus a book-level progress bar keep long books navigable
 - **EPUB chapter mapping** — review imported chapters before queueing: rename, split, merge, reorder, exclude, assign voices, or configure per-chapter weighted Kokoro blends; “Queue with defaults” preserves the quick path
 - **Sentence retakes** — select a sentence in a completed queue chunk, edit and regenerate up to four local A/B takes, then apply the chosen take with a cue-boundary crossfade; the original stays intact until commit
 - **Per-line generation** with individual files + automatic chaptered ZIP bundle, including `chapters.json` for fallback workflows
@@ -119,7 +120,8 @@ Every cloud TTS service gates you behind signups, character limits, and paid tie
 - **Cancel button** — abort generation mid-run, keep partial results
 - **Completeness check** — every sentence is verified against a speech-rate floor; possibly truncated or missing audio is flagged in the output, queue, and diagnostics instead of failing silently
 - **Voice blending** — weighted mix of 2-4 Kokoro voices via custom style tensors (e.g. `af_heart(2)+af_bella(1)`)
-- **EPUB import** — chapter-aware parsing with TOC title extraction, an editable pre-queue mapping step, per-chapter voice/blend metadata, resumable batch generation, and EPUB3 Media Overlay export after synthesis
+- **EPUB import** — chapter-aware parsing with TOC title extraction, a chapter browser that loads a whole chapter into the script box, an editable pre-queue mapping step, per-chapter voice/blend metadata, resumable batch generation, and EPUB3 Media Overlay export after synthesis
+- **Remembered workspace** — the engine, voice, speed, delivery ticks, output format/bitrate/loudness, open disclosure panels, and the EPUB chapter view (filter, sort, load mode, auto-advance) are restored on the next visit from one validated local preference record; per-book chapter ticks, the open chapter, and generated chapters are remembered alongside them
 - **Engine-aware persistent job queue** — queue Kokoro, Supertonic, and KittenTTS jobs; pause, resume, edit/regenerate completed chunks safely, play completed chunks, ZIP-download, and M4B audiobook export survive tab close via IndexedDB checkpointing
 - **M4B preflight + fallback** — queue UI probes WebCodecs AAC before export, including Safari/WebKit AAC when its codec probe passes; Firefox/Linux gaps get a chaptered ZIP/Opus fallback path
 - **CPU mode** — persistent WASM switch for GPUs with corrupted WebGPU output
@@ -260,7 +262,7 @@ Piper-plus is a first-class lazy engine: its MIT runtime and multilingual Tsukuy
 | Document Import | Worker-isolated `pdfjs-dist` for PDF text; `fflate` + `linkedom` for EPUB/DOCX |
 | ZIP Packaging | `fflate` |
 | Icons | `lucide-react` |
-| Testing | Vitest (644 tests across 108 files) + Playwright smoke + EPUBCheck |
+| Testing | Vitest (670 tests across 111 files) + Playwright smoke + EPUBCheck |
 | Linting | oxlint |
 | Hosting | GitHub Pages (static, no backend) |
 
@@ -277,6 +279,7 @@ src/
 ├── main.tsx                 # React entry point + SW registration
 ├── components/
 │   ├── MiniPlayer.tsx        # Document PiP transport and cue highlight surface
+│   ├── EpubChapterPanel.tsx  # EPUB chapter browser: search, ticks, estimates, load-into-script
 │   └── AudioOutputPicker.tsx # Capability-gated output sink selection
 ├── lib/
 │   ├── generation-dispatcher.ts # Abort-aware sentence plans, cues, and progress
@@ -298,6 +301,8 @@ src/
 │   ├── reader.ts             # Stable document coordinates, cue binding, and resume state
 │   ├── media-overlays.ts     # EPUB3 text/SMIL/audio package writer and WAV→MP3 normalization
 │   ├── epub-mapping.ts       # Immutable EPUB chapter edits and per-chapter voice/blend metadata
+│   ├── epub-library.ts       # Chapter search/filter/sort, duration estimates, and remembered per-book selection
+│   ├── ui-preferences.ts     # Validated record of every remembered studio selection and tick
 │   ├── sentence-retakes.ts   # Cue-boundary crossfade, resampling, and sentence text replacement
 │   ├── queue-sentence-retakes.ts # Lazy queue retake generation and atomic splice orchestration
 │   ├── playback.ts          # Read-along resume and sentence navigation
